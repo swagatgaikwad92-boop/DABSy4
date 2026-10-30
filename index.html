@@ -2,6 +2,9 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#07060f"><meta name="color-scheme" content="dark">
-<title>DABSy</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" href="./assets/icon-192.png"><link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
-<link rel="preload" as="image" href="./assets/char-body.webp"><link rel="stylesheet" href="./src/styles.css"></head>
-<body><div id="app" data-boot="1"></div><noscript>DABSy needs JavaScript.</noscript><script type="module" src="./src/main.js"></script></body></html>
+<title>DABSy</title><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" href="./icon-192.png"><link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="preload" as="image" href="./char-body.webp"><link rel="stylesheet" href="./styles.css"><script>(function(){var ok=function(){return document.querySelector('.dabsy[data-ready="1"]')};function show(m){if(ok()||document.getElementById('boot-err'))return;var d=document.createElement('div');d.id='boot-err';d.style.cssText='position:fixed;inset:0;z-index:99;background:#07060f;color:#fff;font:16px system-ui;padding:28px;display:flex;flex-direction:column;gap:14px;justify-content:center';d.innerHTML='<b style="font-size:20px">DABSy couldn’t start</b><span style="opacity:.8">'+String(m).replace(/</g,'&lt;')+'</span><span style="opacity:.6;font-size:14px">If you uploaded files by hand, make sure every file from the zip is in the same folder, including app.js, styles.css and spots.json.</span><button style="padding:12px;border-radius:14px;border:0;font-size:16px" onclick="location.reload()">Reload</button>';document.body.appendChild(d)}
+addEventListener('error',function(e){var t=e.target;show(t&&t.src?'Could not load '+t.src.split('/').pop():(e.message||'Unknown error')+' ('+String(e.filename||'').split('/').pop()+':'+e.lineno+')')},true);
+addEventListener('unhandledrejection',function(e){show(e.reason&&e.reason.message||e.reason)});setTimeout(function(){if(!ok())show('Startup timed out.')},9000);
+if('serviceWorker' in navigator&&(location.protocol==='https:'||/^(localhost|127\.0\.0\.1)$/.test(location.hostname)))addEventListener('load',function(){navigator.serviceWorker.register('./sw.js').catch(function(){})})})();</script></head>
+<body><div id="app" data-boot="1"></div><noscript>DABSy needs JavaScript.</noscript><script defer src="./app.js"></script></body></html>
