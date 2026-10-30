@@ -1,0 +1,1 @@
+{"name":"dabsy","version":"4.0.0","private":true,"type":"module","scripts":{"build":"node scripts/build.mjs","serve":"python3 -m http.server 8080 --directory dist","check":"for f in src/*.js; do node --check $f; done"}}

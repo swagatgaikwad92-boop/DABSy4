@@ -1,0 +1,14 @@
+import {store} from './store.js';
+export const uid=(p='')=>p+Math.random().toString(36).slice(2,8)+Date.now().toString(36).slice(-3);
+export const ymd=(d=new Date())=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+export const prefs=store('prefs',{scene:'bedroom',tod:'auto',motion:'auto',text:1,style:'balanced',lang:'auto',notif:true,nudges:true,onboarded:false});
+export const tasks=store('tasks',{items:[]});
+export const events=store('events',{items:[]});
+export const study=store('study',{log:{}});
+export const widgets=store('widgets',{items:[]});
+export const memory=store('memory',{facts:[]});
+export const chat=store('chat',{api:[]});
+const L=new Map();
+export const bus={on(e,f){(L.get(e)||L.set(e,new Set()).get(e)).add(f);return()=>L.get(e).delete(f)},emit(e,d){(L.get(e)||[]).forEach(f=>{try{f(d)}catch(x){console.error(e,x)}})}};
+export const reduced=()=>{const m=prefs.get().motion;return m==='reduced'||(m==='auto'&&matchMedia('(prefers-reduced-motion: reduce)').matches)};
+export const $=(t,a={},...k)=>{const e=document.createElement(t);for(const[n,v]of Object.entries(a)){if(v==null||v===false)continue;if(n==='class')e.className=v;else if(n.startsWith('on'))e.addEventListener(n.slice(2),v);else if(n==='html')e.innerHTML=v;else e.setAttribute(n,v===true?'':v)}for(const c of k.flat())if(c!=null&&c!==false)e.append(c);return e};
