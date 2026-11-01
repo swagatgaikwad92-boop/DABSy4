@@ -32,12 +32,15 @@ const $=(t,a={},...k)=>{const e=document.createElement(t);for(const[n,v]of Objec
 return{get uid(){return uid},get ymd(){return ymd},get prefs(){return prefs},get tasks(){return tasks},get events(){return events},get study(){return study},get widgets(){return widgets},get memory(){return memory},get chat(){return chat},get bus(){return bus},get reduced(){return reduced},get $(){return $}}})();
 __m['ai.js']=(()=>{
 class AIError extends Error{constructor(kind,msg,o={}){super(msg);this.kind=kind;this.retry=!!o.retry;this.code=o.code||''}}
-const DEFAULT_API='https://dabsy-ai.swagatdemo9292.workers.dev';
-let API=DEFAULT_API;
-async function loadConfig(){try{const r=await fetch('./config.json',{cache:'no-store'});API=String((await r.json()).apiUrl||DEFAULT_API).trim().replace(/\/+$/,'')}catch{API=DEFAULT_API}return API}
+const DEFAULT_API='https://dabsy-brain.swagatdemo9292.workers.dev',LEGACY_API='https://dabsy-ai.swagatdemo9292.workers.dev';
+let API=DEFAULT_API,FALLBACK=LEGACY_API;
+async function loadConfig(){try{const r=await fetch('./config.json',{cache:'no-store'});const j=await r.json(),u=x=>String(x||'').trim().replace(/\/+$/,'');API=u(j.apiUrl)||DEFAULT_API;FALLBACK=u(j.fallbackApiUrl)}catch{API=DEFAULT_API;FALLBACK=LEGACY_API}return API}
+async function ping(base){try{const c=new AbortController();setTimeout(()=>c.abort(),8000);const r=await fetch(base+'/health',{signal:c.signal,cache:'no-store'});const j=await r.json().catch(()=>({}));return j.ok===true?{ok:true,model:j.model||''}:{ok:false,reason:'bad-response'}}catch{return{ok:false,reason:'unreachable'}}}
 async function health(){
   if(!API)return{ok:false,reason:'not-configured'};
-  try{const c=new AbortController();setTimeout(()=>c.abort(),8000);const r=await fetch(API+'/health',{signal:c.signal,cache:'no-store'});const j=await r.json().catch(()=>({}));return j.ok===true?{ok:true,model:j.model||''}:{ok:false,reason:'bad-response'}}catch{return{ok:false,reason:'unreachable'}}}
+  let h=await ping(API);
+  if(!h.ok&&FALLBACK&&FALLBACK!==API){const f=await ping(FALLBACK);if(f.ok){API=FALLBACK;FALLBACK='';h=f}}
+  return h}
 function parseSSE(){let buf='',ev='',data=[];return chunk=>{buf+=chunk;const out=[];let i;while((i=buf.search(/\r?\n/))>=0){const m=buf.match(/\r?\n/)[0].length;const line=buf.slice(0,i);buf=buf.slice(i+m);
   if(line===''){if(data.length||ev)out.push({event:ev||'message',data:data.join('\n')});ev='';data=[];continue}
   if(line[0]===':')continue;const k=line.indexOf(':');const f=k<0?line:line.slice(0,k);let v=k<0?'':line.slice(k+1);if(v[0]===' ')v=v.slice(1);if(f==='event')ev=v;else if(f==='data')data.push(v)}return out}}
@@ -303,6 +306,7 @@ const TOOLS=[
  {name:'plan_day',description:'Propose a schedule for one day. The user reviews, edits and confirms in the app before anything is saved.',input_schema:S({date:str('YYYY-MM-DD'),mood:str('theme of the day, e.g. Ghibli'),items:{type:'array',items:S({title:str('with a fitting emoji'),time:str('HH:MM'),duration_min:{type:'number'},existing_id:str('id of an existing open task to reuse')},['title','time'])}},['date','items'])},
  {name:'add_event',description:'Add a calendar event (stored on this device).',input_schema:S({title:str(''),date:str('YYYY-MM-DD'),start:str('HH:MM'),end:str('HH:MM')},['title','date','start'])},
  {name:'start_focus',description:'Open Study Space and start a focus timer.',input_schema:S({minutes:{type:'number'},topic:str('')})},
+ {name:'open_app',description:'Open one of the user\'s apps: ghibli (Ghibli Calendar, synced with DABSy), study (Study Space), solve (SolveCount). Use when asked to open or show it.',input_schema:S({app:{type:'string',enum:['ghibli','study','solve']}},['app'])},
  {name:'remember',description:'Save a short durable fact about the user (preferences, exam dates, name). Only when it will help later.',input_schema:S({fact:str('one short sentence')},['fact'])}];
 const bad=e=>({ok:false,error:e}),good=o=>({ok:true,...o});
 const clean=s=>String(s??'').replace(/\s+/g,' ').trim().slice(0,140);
@@ -331,6 +335,7 @@ function createExecutor(ui){
       else{const t={id:uid('t_'),title:x.title,due:i.date,time:x.time,priority:'normal',done:false,notes:'',created:Date.now(),dur:x.dur};tasks.set({items:[...tasks.get().items,t]});saved.push({id:t.id,title:t.title,time:t.time})}}
     ui.card('cal',`Saved ${saved.length} item${saved.length===1?'':'s'} for ${i.date}`);return good({saved})}
   case'start_focus':{ui.focus(Math.max(5,Math.min(180,+i.minutes||25)),clean(i.topic));return good({started:true})}
+  case'open_app':{if(!['ghibli','study','solve'].includes(i.app))return bad('unknown app');ui.app?.(i.app);return good({opened:i.app})}
   case'remember':{const f=clean(i.fact);if(!f)return bad('empty fact');const m=memory.get().facts;if(!m.includes(f))memory.set({facts:[...m,f].slice(-25)});return good({saved:true})}
   default:return bad('unknown tool '+name)}}}
 const LEN={concise:'Default to 1–3 sentences; expand only if asked.',balanced:'Simple questions: 1–3 sentences. "Explain/how/why": a clear explanation, usually 1–4 short paragraphs. Never pad.',detailed:'Thorough, well-structured explanations with examples; stay skimmable (short headings, lists).'};
@@ -414,6 +419,7 @@ function createChat({host,hooks}){
   confirmPlan:plan=>new Promise(res=>{pend=res;const rows=plan.items.map(it=>{const cb=$('input',{type:'checkbox',checked:true,'aria-label':'Include'}),tm=$('input',{type:'time',value:it.time,'aria-label':'Time'}),ti=$('input',{type:'text',value:it.title,maxlength:140,'aria-label':'Title'});return{it,cb,tm,ti,row:$('div',{class:'prow'},cb,tm,ti)}});
    const d=new Date(plan.date+'T12:00'),c=$('div',{class:'plan'},$('div',{class:'plan-h'},$('b',{},d.toLocaleDateString([],{weekday:'long',day:'numeric',month:'short'})),plan.mood?$('span',{},plan.mood):null),...rows.map(r=>r.row),
     $('div',{class:'btns'},$('button',{class:'btn',onclick:()=>{pend=null;c.classList.add('done');res(null)}},'Not now'),$('button',{class:'btn primary',onclick:()=>{pend=null;c.classList.add('done');res(rows.filter(r=>r.cb.checked&&r.ti.value.trim()&&r.tm.value).map(r=>({...r.it,title:r.ti.value.trim(),time:r.tm.value})))}},'Save plan')));msgs.append(c);toBottom()})};
+ ui.app=k=>hooks.app?.(k);
  const run=createExecutor(ui);
  function errBox(e,text){const cfg=e.kind==='config';const box=$('div',{class:'msg bot'},$('div',{class:'err'},cfg?'I can’t reach my brain yet — this build has no AI backend address set (config.json → apiUrl). Tasks, calendar, study timer and widgets still work.':e.kind==='aborted'?'Stopped.':e.message||'Something went wrong.',
   e.kind==='aborted'||cfg?null:$('button',{class:'btn sm',onclick:()=>{box.remove();submit(text,true)}},'Try again')));msgs.append(box);toBottom()}
@@ -572,7 +578,38 @@ function settingsPanel({scenes,onReplay,onScene,widgetsReset,notifyPerm}){return
   sec('Accessibility',row('Text size',seg([[.9,'S'],[1,'M'],[1.15,'L'],[1.3,'XL']],P.text,v=>set({text:v})))),
   sec('Privacy',$('small',{},'Everything is stored on this device. Messages go to the AI backend only to answer you.'),row('Clear chat history',$('button',{class:'btn sm',type:'button',onclick:()=>{bus.emit('chat-clear')}},'Clear')),row('Forget all memories',$('button',{class:'btn sm',type:'button',onclick:()=>{memory.set({facts:[]});drawMem()}},'Forget')),conf))})}
 
-return{get sheet(){return sheet},get seg(){return seg},get tasksPanel(){return tasksPanel},get calendarPanel(){return calendarPanel},get timer(){return timer},get startTimer(){return startTimer},get studyPanel(){return studyPanel},get settingsPanel(){return settingsPanel}}})();
+/* ---------- Connected apps: Ghibli Calendar / Study Space / SolveCount (postMessage bridge) ---------- */
+const ORIGIN='https://swagatgaikwad92-boop.github.io';
+const APPS={ghibli:{name:'Ghibli Calendar',emoji:'🌿',url:ORIGIN+'/Ghibli-Calander/',note:'Synced events & tasks'},study:{name:'Study Space',emoji:'📚',url:ORIGIN+'/study-space/',note:'Minutes feed your progress'},solve:{name:'SolveCount',emoji:'🧮',url:ORIGIN+'/SolveCount/',note:'Practice & solving'}};
+const DR=/^\d{4}-\d{2}-\d{2}$/,TR=/^\d{2}:\d{2}$/,cl_=v=>String(v??'').replace(/\s+/g,' ').trim().slice(0,140);
+function snapshot(){const L=study.get().log,td=ymd();return{dabsy:1,type:'state',today:td,night:document.getElementById('app')?.dataset.night==='1',
+ tasks:tasks.get().items.map(t=>({id:t.id,title:t.title,due:t.due||'',time:t.time||'',priority:t.priority,done:!!t.done})),
+ events:events.get().items.map(e=>({id:e.id,extId:e.extId||'',title:e.title,date:e.date,start:e.start,end:e.end||''})),studyLog:L}}
+function handle(m){if(!m||m.dabsy!==1)return null;let r={ok:true};
+ try{switch(m.type){
+ case'add_event':{if(!cl_(m.title)||!DR.test(m.date||'')||!TR.test(m.start||''))return{ok:false,error:'title, date YYYY-MM-DD, start HH:MM required'};
+  const it=events.get().items,k=m.extId?it.find(e=>e.extId===m.extId):it.find(e=>e.title===cl_(m.title)&&e.date===m.date&&e.start===m.start);
+  const ev={title:cl_(m.title),date:m.date,start:m.start,end:TR.test(m.end||'')?m.end:'',extId:m.extId?String(m.extId).slice(0,60):''};
+  if(k)events.set({items:it.map(e=>e===k?{...e,...ev}:e)});else events.set({items:[...it,{id:uid('e_'),...ev}]});break}
+ case'delete_event':{const id=String(m.extId||m.id||'');events.set({items:events.get().items.filter(e=>e.extId!==id&&e.id!==id)});break}
+ case'add_task':{const t=cl_(m.title);if(!t)return{ok:false,error:'title required'};if(tasks.get().items.some(x=>!x.done&&x.title===t&&(x.due||'')===(m.due||'')))break;
+  tasks.set({items:[...tasks.get().items,{id:uid('t_'),title:t,due:DR.test(m.due||'')?m.due:'',time:TR.test(m.time||'')?m.time:'',priority:['high','normal','low'].includes(m.priority)?m.priority:'normal',done:false,notes:'',created:Date.now()}]});break}
+ case'complete_task':{tasks.set({items:tasks.get().items.map(t=>t.id===m.id?{...t,done:m.done!==false}:t)});break}
+ case'study_minutes':{const n=Math.max(0,Math.min(600,Math.round(+m.minutes||0)));if(n){const k=ymd();study.set({log:{...study.get().log,[k]:(study.get().log[k]||0)+n}});bus.emit('study-tick')}break}
+ case'hello':case'get_state':break;default:return{ok:false,error:'unknown type'}}}catch(e){return{ok:false,error:String(e.message||e)}}
+ return r}
+function appPanel(key){const A=APPS[key];if(!A)return;return sheet(A.name,(b,api)=>{
+ const fr=$('iframe',{class:'appframe',src:A.url,title:A.name,allow:'fullscreen',referrerpolicy:'no-referrer-when-downgrade',style:'width:100%;height:68vh;border:0;border-radius:16px;background:#fff'});
+ fr.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+ const sync=()=>fr.contentWindow?.postMessage(snapshot(),ORIGIN);
+ const onMsg=e=>{if(e.origin!==ORIGIN||e.source!==fr.contentWindow)return;const res=handle(e.data);if(!res)return;fr.contentWindow.postMessage({dabsy:1,type:'ack',for:e.data.type,reqId:e.data.reqId,...res},ORIGIN);sync()};
+ let t;const push=()=>{clearTimeout(t);t=setTimeout(sync,120)};const offs=[tasks.on(push),events.on(push),study.on(push)];
+ addEventListener('message',onMsg);
+ b.append(fr,$('div',{class:'btns center',style:'margin-top:10px'},$('a',{class:'btn sm',href:A.url,target:'_blank',rel:'noopener'},'Open in browser ↗')),$('small',{class:'note'},A.note+'. If the page stays blank, it may not allow embedding — use “Open in browser”.'));
+ return()=>{removeEventListener('message',onMsg);offs.forEach(f=>f())}})}
+function appsPanel(){return sheet('Apps',b=>{b.append($('div',{class:'applist',style:'display:grid;gap:10px'},...Object.entries(APPS).map(([k,A])=>$('button',{class:'btn',type:'button',style:'display:flex;gap:12px;align-items:center;text-align:left;padding:14px',onclick:()=>appPanel(k)},$('span',{style:'font-size:1.6em'},A.emoji),$('span',{},$('b',{},A.name),$('br'),$('small',{},A.note))))),$('small',{class:'note'},'Apps embedded here share tasks, events and study minutes with DABSy through a small bridge (dabsy-bridge.js).'))})}
+
+return{get appsPanel(){return appsPanel},get appPanel(){return appPanel},get sheet(){return sheet},get seg(){return seg},get tasksPanel(){return tasksPanel},get calendarPanel(){return calendarPanel},get timer(){return timer},get startTimer(){return startTimer},get studyPanel(){return studyPanel},get settingsPanel(){return settingsPanel}}})();
 __m['main.js']=(()=>{
 const {$,prefs,tasks,events,widgets:wstore,memory,chat:cstore,reduced,bus,ymd}=__m['state.js'];
 const {loadConfig,health}=__m['ai.js'];
@@ -582,7 +619,7 @@ const {createWidgets,loadWx,icon}=__m['widgets.js'];
 const {createChat}=__m['chat.js'];
 const {pushLayer,popLayer,hasLayer}=__m['layers.js'];
 const spots=__m['spots.js'];
-const {tasksPanel,calendarPanel,studyPanel,settingsPanel,startTimer}=__m['panels.js'];
+const {tasksPanel,calendarPanel,studyPanel,settingsPanel,startTimer,appsPanel,appPanel}=__m['panels.js'];
 const SCENES={bedroom:'Bedroom',study:'Study desk',garden:'Garden',cabin:'Cabin'},FLOOR={bedroom:.7,study:.8,garden:.74,cabin:.72},FOCAL={bedroom:[.78,.18],study:[.15,.2],garden:[.5,.3],cabin:[.85,.3]};
 const app=document.getElementById('app');app.dataset.view='home';
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -619,8 +656,8 @@ const widgets=createWidgets({layer:wlayer,trayHost:blayer,world,cb:{pickup:()=>b
  open:(t)=>{if(t==='tasks')tasksPanel();else if(t==='calendar')calendarPanel();else if(t==='study')studyPanel();else if(t==='weather')loadWx(true)}}});
 widgets.tray.append($('button',{class:'tray-x',type:'button','aria-label':'Close widget tray',onclick:()=>widgets.openTray(false),html:'✕'}));
 /* ---- bubbles (double-tap menu) ---- */
-const IC={chat:'<path d="M5 6h14a2 2 0 012 2v7a2 2 0 01-2 2H11l-4 3v-3H5a2 2 0 01-2-2V8a2 2 0 012-2z"/>',study:'<path d="M4 6c3-1 6-1 8 1 2-2 5-2 8-1v12c-3-1-6-1-8 1-2-2-5-2-8-1z"/>',calendar:'<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/>',tasks:'<rect x="5" y="4" width="14" height="16" rx="3"/><path d="M9 10l2 2 4-4M9 16h6"/>',widgets:'<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><circle cx="16.5" cy="16.5" r="3.5"/>',settings:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>'};
-const ITEMS=[['chat','Chat',()=>openChat()],['study','Study',()=>studyPanel()],['calendar','Calendar',()=>calendarPanel()],['tasks','Tasks',()=>tasksPanel()],['widgets','Widgets',()=>{widgets.openTray(true);bus.emit('widgets-open')}],['settings','Settings',()=>openSettings()]];
+const IC={chat:'<path d="M5 6h14a2 2 0 012 2v7a2 2 0 01-2 2H11l-4 3v-3H5a2 2 0 01-2-2V8a2 2 0 012-2z"/>',study:'<path d="M4 6c3-1 6-1 8 1 2-2 5-2 8-1v12c-3-1-6-1-8 1-2-2-5-2-8-1z"/>',calendar:'<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/>',tasks:'<rect x="5" y="4" width="14" height="16" rx="3"/><path d="M9 10l2 2 4-4M9 16h6"/>',apps:'<circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="7" r="2.5"/><circle cx="7" cy="17" r="2.5"/><circle cx="17" cy="17" r="2.5"/>',widgets:'<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><circle cx="16.5" cy="16.5" r="3.5"/>',settings:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>'};
+const ITEMS=[['chat','Chat',()=>openChat()],['study','Study',()=>studyPanel()],['calendar','Calendar',()=>calendarPanel()],['tasks','Tasks',()=>tasksPanel()],['apps','Apps',()=>appsPanel()],['widgets','Widgets',()=>{widgets.openTray(true);bus.emit('widgets-open')}],['settings','Settings',()=>openSettings()]];
 const bubbles={el:null,isOpen:false,
  open(){if(this.isOpen||view!=='home')return;this.isOpen=true;const W=world().W,H=world().H,cx=dabsy.x,cy=dabsy.y-dabsy.h*.5,n=ITEMS.length,R=clamp(Math.min(W*.36,112),84,120);
   const below=cy<R+90,a0=below?-20:200,a1=below?200:-20;this.el=$('div',{class:'bub-wrap'});
@@ -630,12 +667,25 @@ const bubbles={el:null,isOpen:false,
   this.layer=pushLayer(()=>this.close(true));blayer.append(this.el);requestAnimationFrame(()=>this.el.classList.add('in'));bus.emit('bubbles')},
  close(fromHist){if(!this.isOpen)return;this.isOpen=false;const e=this.el;e.classList.remove('in');e.classList.add('out');setTimeout(()=>e.remove(),reduced()?0:260);if(!fromHist)popLayer(this.layer);bus.emit('bubbles-closed')}};
 sceneEl.addEventListener('pointerdown',()=>{if(view==='home'){bubbles.close();widgets.openTray(false);speakEl.hidden=true}});
+
+/* ---- swipe-up glass navigation bar (separate from the orbital launcher) ---- */
+const nav={el:null,open:false,
+ show(){if(this.open||view!=='home')return;this.open=true;bubbles.close();const sc=Object.keys(SCENES),chip=(l,fn,on)=>$('button',{class:'btn sm',type:'button','aria-pressed':on==null?null:String(!!on),onclick:fn},l);
+  this.el=$('nav',{class:'glass strong navbar','aria-label':'Quick navigation',style:'position:absolute;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:30;padding:12px;border-radius:24px;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;transform:translateY(120%);transition:transform .35s cubic-bezier(.2,.9,.3,1)'},
+   chip('🏠 Home',()=>this.close()),chip('🌗 Room',()=>{const i=sc.indexOf(prefs.get().scene);prefs.set({scene:sc[(i+1)%sc.length]});dabsy.resize();widgets.relayout();toast(SCENES[prefs.get().scene])}),
+   chip('🧩 Widgets',()=>{this.close();widgets.openTray(true)}),chip('🔔 Alerts',function(){const v=!prefs.get().notif;prefs.set({notif:v});this.setAttribute('aria-pressed',String(v));toast(v?'Reminders on':'Reminders off')},prefs.get().notif),
+   chip('⚙️ Settings',()=>{this.close();openSettings()}));
+  app.append(this.el);this.layer=pushLayer(()=>this.close(true));requestAnimationFrame(()=>this.el.style.transform='none')},
+ close(fromHist){if(!this.open)return;this.open=false;const e=this.el;e.style.transform='translateY(120%)';setTimeout(()=>e.remove(),reduced()?0:320);if(!fromHist)popLayer(this.layer)}};
+{let sy=null,sx=0;sceneEl.addEventListener('pointerdown',e=>{sy=e.clientY;sx=e.clientX});
+ addEventListener('pointerup',e=>{if(sy==null)return;const dy=e.clientY-sy,dx=e.clientX-sx,fromBottom=sy>innerHeight*.6;sy=null;if(view==='home'&&fromBottom&&dy<-70&&Math.abs(dx)<70)nav.show()});
+ addEventListener('pointercancel',()=>sy=null)}
 /* ---- chat ---- */
 let view='home',home={x:0,y:0},cl=null,stateT=0;
 const chat=createChat({host:chatEl,hooks:{close:()=>closeChat(),
  state(s){clearTimeout(stateT);if(s==='thinking')dabsy.act('thinking');else if(s==='answering')dabsy.act('answering');else if(s==='happy'){dabsy.act('');dabsy.state('happy');stateT=setTimeout(()=>dabsy.state('focused'),2200)}else if(s==='confused'){dabsy.act('confused');stateT=setTimeout(()=>dabsy.act(''),1800)}else dabsy.act('')},
  typing(){clearTimeout(chat._t);dabsy.lookRel(.2,.95);if(Math.random()<.12)dabsy.nod();chat._t=setTimeout(()=>dabsy.lookRel(0,-.1),1400)},
- focus:(m,t)=>{startTimer(m,t);studyPanel(m,t)}}});
+ focus:(m,t)=>{startTimer(m,t);studyPanel(m,t)},app:k=>{bubbles.close();appPanel(k)}}});
 bus.on('chat-clear',()=>{chat.clear();toast('Chat history cleared')});
 async function openChat(){if(view==='chat')return;view='chat';bubbles.close();widgets.openTray(false);speakEl.hidden=true;home={x:dabsy.x,y:dabsy.y,s:dabsy.scale};app.dataset.view='chat';chatEl.setAttribute('aria-hidden','false');chatEl.inert=false;brain.lock(S.FOCUSED);
  cl=pushLayer(()=>closeChat(true));bus.emit('chat-open');await dabsy.flyTo(world().W/2,126,.62,true);if(view==='chat'){dabsy.look(world().W/2,world().H);chat.open()}}
